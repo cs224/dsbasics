@@ -15,6 +15,7 @@ Data Science Basics
   * [distributing-packages](https://packaging.python.org/guides/distributing-packages-using-setuptools/#distributing-packages)
 
 
+## Install
 
     python -m pip install --upgrade pip setuptools wheel
     git clone https://github.com/cs224/dsbasics.git

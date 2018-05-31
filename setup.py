@@ -121,7 +121,7 @@ setup(
     #
     #   py_modules=["my_module"],
     #
-    packages=find_packages(exclude=['contrib', 'docs', 'tests']),  # Required
+    packages=find_packages(exclude=['contrib', 'docs', 'tests', 'examples']),  # Required
 
     # This field lists other packages that your project depends on to run.
     # Any package you put here will be installed by pip when your project is
@@ -135,7 +135,11 @@ setup(
         'pandas>=0.22.0',
         'scikit-learn>=0.19.0',
         'matplotlib>=2.2.0',
-        'seaborn>=0.8.0'
+        'seaborn>=0.8.0',
+        'rpy2>=2.9.1',
+        'libpgm>=1.3',
+        #'networkx==1.11',
+        'pgmpy>=0.1.6'
     ],  # Optional
 
     # List additional groups of dependencies here (e.g. development

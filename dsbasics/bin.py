@@ -137,7 +137,7 @@ class PointMeasures(FitnessFunc):
             return super(PointMeasures, self).prior(Ntot)
         else:
             # eq. at end of sec 3.3 in Scargle 2012
-            return 1.32 + 0.577 * np.log10(N)
+            return 1.32 + 0.577 * np.log10(Ntot)
 
 
 def bayesian_blocks(t, x=None, sigma=None, fitness='events', **kwargs):

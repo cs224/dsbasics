@@ -15,6 +15,7 @@ References
 import numpy as np, pandas as pd, sklearn.base, matplotlib.pyplot as plt
 from sklearn.utils import check_array
 from sklearn.utils.validation import check_is_fitted
+import sklearn.tree
 import warnings
 
 
@@ -549,4 +550,3 @@ class DecisionTreeBinTransformer(BaseBinTransformer):
         self.bins_ = bins_
 
         return self
-

@@ -25,3 +25,11 @@ Data Science Basics
 
     python setup.py sdist
     python setup.py bdist_wheel
+
+
+## API design for machine learning software: experiences from the scikit-learn project
+* [API design for machine learning software: experiences from the scikit-learn project](https://arxiv.org/pdf/1309.0238v1.pdf)
+  * Estimators: fit() method. hyperparameters must be set as an instance variable (generally via a constructor parameter).
+  * Transformers: some estimators can also transform a dataset; these are called transformers: transform() and fit_transform() method.
+  * Predictors: some estimators can make predictions; these are called predictors: predict(), score() method.
+* [Creating your own estimator in scikit-learn](http://danielhnyk.cz/creating-your-own-estimator-scikit-learn/)

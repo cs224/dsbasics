@@ -550,3 +550,116 @@ class DecisionTreeBinTransformer(BaseBinTransformer):
         self.bins_ = bins_
 
         return self
+
+
+def category_code_intervals_to_category_enumeration_labels(catdtype, intervals):
+    if not isinstance(catdtype, pd.api.types.CategoricalDtype):
+        raise RuntimeError('Only accepting pandas.api.types.CategoricalDtype values as input for catdtype!')
+    if not catdtype.ordered:
+        raise RuntimeError('Only accepting ordered pandas.api.types.CategoricalDtype as input for catdtype!')
+    cat_levels = catdtype.categories.values
+    cat_codes = range(len(cat_levels))
+
+    bin_index = 0
+    labels = []
+    label = []
+    for i in cat_codes:
+        if intervals[bin_index] <= i and i < intervals[bin_index + 1]:
+            label += [cat_levels[i]]
+        else:
+            labels += ['[' + ','.join([str(l) for l in label]) + ']']
+            label = [cat_levels[i]]
+            bin_index += 1
+
+    labels += ['[' + ','.join([str(l) for l in label]) + ']']
+
+    return labels
+
+
+class TargetVariableDecisionTreeBinTransformer(BaseBinTransformer):
+
+    def __init__(self, max_leaf_nodes=None, max_depth=5, min_samples_leaf=5):
+        if max_leaf_nodes is not None:
+            self.max_leaf_nodes = max_leaf_nodes
+            self.max_depth = None
+            self.min_samples_leaf = None
+        else:
+            self.max_leaf_nodes = None
+            self.max_depth = max_depth
+            self.min_samples_leaf = min_samples_leaf
+
+
+    def fit(self, X, y):
+        # X = check_array(X)
+        if len(X.shape) != 2:
+            raise RuntimeError("X has invalid shape!")
+        # if len(X.shape[1]) != 1:
+        #     raise RuntimeError("X has invalid shape; it has to be a column vector with only one column!")
+
+
+        self.X_ = X
+        self.y_ = y
+
+        bins_   = []
+        labels_ = []
+        for i in range(X.shape[1]):
+            x = X.iloc[:,i]
+            not_null_index = ~pd.isnull(x) & ~pd.isnull(self.y_)
+
+            y = self.y_[not_null_index]
+            if isinstance(y, pd.Series) and y.dtype.name == 'category':
+                y = y.cat.codes.values[not_null_index]
+
+            x = x[not_null_index]
+
+            iscategory = False
+            if isinstance(x, pd.Series) and x.dtype.name == 'category':
+                iscategory = True
+                x = x.cat.codes.values
+
+            dtr = None
+            if self.max_leaf_nodes is not None:
+                dtr = sklearn.tree.DecisionTreeRegressor(max_leaf_nodes=self.max_leaf_nodes, random_state=0) # criterion='entropy',
+            else:
+                dtr = sklearn.tree.DecisionTreeRegressor(max_depth=self.max_depth, min_samples_leaf=self.min_samples_leaf, random_state=0) # criterion='entropy',
+
+            if not isinstance(x, pd.Series):
+                x = pd.Series(x)
+
+            dtr.fit(x.values.reshape(-1,1),y)
+            thrs_out = np.unique(dtr.tree_.threshold[dtr.tree_.feature > -2])
+            thrs_out = np.sort(thrs_out)
+            min = np.min(x).reshape(-1)
+            max = np.max(x).reshape(-1) + 1
+            thrs_out = np.concatenate([min, thrs_out, max])
+            bins_ += [thrs_out]
+            if iscategory:
+                labels_ += [category_code_intervals_to_category_enumeration_labels(self.X_.iloc[:,i].dtype, thrs_out)]
+            else:
+                labels_ += [None]
+
+        self.bins_   = bins_
+        self.labels_ = labels_
+
+        return self
+
+    def transform(self, X):
+        try:
+            getattr(self, "bins_")
+        except AttributeError:
+            raise RuntimeError("You must train classifer before predicting data!")
+        check_is_fitted(self, ['bins_'], all_or_any=all)
+
+        # X = check_array(X)
+
+        r = X.copy()
+        for i, bin in enumerate(self.bins_):
+            bin_boundaries = bin
+            bin_labels = self.labels_[i]
+
+            if bin_labels is None:
+                r.iloc[:,i] = pd.cut(X.iloc[:,i], bin_boundaries, right=False)
+            else:
+                r.iloc[:,i] = pd.cut(X.iloc[:,i], bin_boundaries, labels=bin_labels, right=False)
+
+        return r

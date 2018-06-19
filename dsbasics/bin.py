@@ -558,7 +558,7 @@ def category_code_intervals_to_category_enumeration_labels(catdtype, intervals):
     if not catdtype.ordered:
         raise RuntimeError('Only accepting ordered pandas.api.types.CategoricalDtype as input for catdtype!')
     cat_levels = catdtype.categories.values
-    cat_codes = range(len(cat_levels))
+    cat_codes = range(int(intervals[0]),len(cat_levels))
 
     bin_index = 0
     labels = []
@@ -604,11 +604,14 @@ class TargetVariableDecisionTreeBinTransformer(BaseBinTransformer):
         labels_ = []
         for i in range(X.shape[1]):
             x = X.iloc[:,i]
+            # print('iteration: {}'.format(i))
+            # if isinstance(x, pd.Series):
+            #     print(x.name)
             not_null_index = ~pd.isnull(x) & ~pd.isnull(self.y_)
 
             y = self.y_[not_null_index]
             if isinstance(y, pd.Series) and y.dtype.name == 'category':
-                y = y.cat.codes.values[not_null_index]
+                y = y.cat.codes.values
 
             x = x[not_null_index]
 
@@ -633,6 +636,7 @@ class TargetVariableDecisionTreeBinTransformer(BaseBinTransformer):
             max = np.max(x).reshape(-1) + 1
             thrs_out = np.concatenate([min, thrs_out, max])
             bins_ += [thrs_out]
+            # print(bins_)
             if iscategory:
                 labels_ += [category_code_intervals_to_category_enumeration_labels(self.X_.iloc[:,i].dtype, thrs_out)]
             else:
@@ -654,12 +658,14 @@ class TargetVariableDecisionTreeBinTransformer(BaseBinTransformer):
 
         r = X.copy()
         for i, bin in enumerate(self.bins_):
+            # print('iteration: {}'.format(i))
+
             bin_boundaries = bin
             bin_labels = self.labels_[i]
 
             if bin_labels is None:
                 r.iloc[:,i] = pd.cut(X.iloc[:,i], bin_boundaries, right=False)
             else:
-                r.iloc[:,i] = pd.cut(X.iloc[:,i], bin_boundaries, labels=bin_labels, right=False)
+                r.iloc[:,i] = pd.cut(X.iloc[:,i].cat.codes.values, bin_boundaries, labels=bin_labels, right=False)
 
         return r

@@ -783,35 +783,87 @@ def convert_categories_to_string_categories(ldf, inplace=True):
     else:
         return ldf
 
+class MetaDataInitTransformer(sklearn.base.BaseEstimator, sklearn.base.TransformerMixin):
+
+    def __init__(self, metadata={}):
+        self.metadata = metadata
+
+    def fit(self, X=None, y=None):
+        self.metadata.clear()
+        return self
+
+    def transform(self, X):
+        return X
+
+
+class ColumnNameSanitzerTransformer(sklearn.base.BaseEstimator, sklearn.base.TransformerMixin):
+
+    def __init__(self, categorical_columns, ordered_categorical_columns, discrete_columns, continuous_columns, metadata={}):
+        self.categorical_columns         = categorical_columns
+        self.ordered_categorical_columns = ordered_categorical_columns
+        self.discrete_columns            = discrete_columns
+        self.continuous_columns          = continuous_columns
+        self.metadata                    = metadata
+
+    def fit(self, X, y=None):
+        self.has_y = False
+
+        self.df = X.copy()
+        self.df_ = sklearn_fit_helper_transform_X(X, sanitize_column_names_p=True)
+
+        if 'y_' in self.metadata:
+            y = self.metadata['y_']
+
+        if y is not None:
+            self.has_y = True
+            self.df = pd.concat([self.df, y], axis=1)
+            y = sklearn_fit_helper_transform_y(y, sanitize_column_names_p=True)
+            self.df_[y.name] = y
+
+        self.metadata['sanitized_column_name_mapping'] = dict(zip(self.df.columns, self.df_.columns))
+
+        return self
+
+    def transform(self, X):
+        if self.has_y:
+            return self.df_.iloc[:,:-1]
+        else:
+            return self.df_
+
+
 class CategoricalTransformer(sklearn.base.BaseEstimator, sklearn.base.TransformerMixin):
 
-    def __init__(self, categorical_columns, ordered_categorical_columns, discrete_columns, continuous_columns, levels_map, null_to_NA_columns=[], sanitize_column_names=True, levels_as_strings=True):
+    def __init__(self, categorical_columns, ordered_categorical_columns, discrete_columns, continuous_columns, levels_map, metadata={}):
         self.categorical_columns         = categorical_columns
         self.ordered_categorical_columns = ordered_categorical_columns
         self.discrete_columns            = discrete_columns
         self.continuous_columns          = continuous_columns
         self.levels_map                  = levels_map
-        self.null_to_NA_columns          = null_to_NA_columns
-        self.sanitize_column_names       = sanitize_column_names
-        self.levels_as_strings           = levels_as_strings
+        self.metadata                    = metadata
 
     def fit(self, X, y=None):
         self.has_y = False
 
         ldf = X.copy()
-        self.df_ = sklearn_fit_helper_transform_X(X, sanitize_column_names_p=self.sanitize_column_names)
+        self.df_ = sklearn_fit_helper_transform_X(X)
+
+        if 'y_' in self.metadata:
+            y = self.metadata['y_']
 
         if y is not None:
             self.has_y = True
             ldf = pd.concat([ldf, y], axis=1)
-            y = sklearn_fit_helper_transform_y(y, sanitize_column_names_p=self.sanitize_column_names)
+            y = sklearn_fit_helper_transform_y(y)
             self.df_[y.name] = y
 
+        scn = lambda x: x
+        if 'sanitized_column_name_mapping' in self.metadata:
+            scn = lambda x: self.metadata['sanitized_column_name_mapping'][x]
 
         discrete_non_null, discrete_with_null, continuous_non_null, continuous_with_null, derived_levels_map = discrete_and_continuous_variables_with_and_without_nulls(self.df_)
 
         for col in self.categorical_columns:
-            scol = sanitize_column_name(col)
+            scol = scn(col)
             if col in self.levels_map:
                 levels = self.levels_map[col]
             elif scol in derived_levels_map:
@@ -821,12 +873,12 @@ class CategoricalTransformer(sklearn.base.BaseEstimator, sklearn.base.Transforme
 
             if all([np.issubdtype(type(level), np.number) for level in levels]):
                 levels = sorted(levels)
-                self.df_[scol] = ldf[col].astype(pd.api.types.CategoricalDtype(levels, ordered=True))
+                self.df_[scol] = ldf[scol].astype(pd.api.types.CategoricalDtype(levels, ordered=True))
             else:
-                self.df_[scol] = ldf[col].astype(pd.api.types.CategoricalDtype(levels, ordered=False))
+                self.df_[scol] = ldf[scol].astype(pd.api.types.CategoricalDtype(levels, ordered=False))
 
         for col in self.ordered_categorical_columns:
-            scol = sanitize_column_name(col)
+            scol = scn(col)
             if col in self.levels_map:
                 levels = self.levels_map[col]
             elif scol in derived_levels_map:
@@ -834,31 +886,94 @@ class CategoricalTransformer(sklearn.base.BaseEstimator, sklearn.base.Transforme
             else:
                 levels = None
 
-            self.df_[scol] = ldf[col].astype(pd.api.types.CategoricalDtype(levels, ordered=True))
+            self.df_[scol] = ldf[scol].astype(pd.api.types.CategoricalDtype(levels, ordered=True))
 
         for col in self.continuous_columns:
-            scol = sanitize_column_name(col)
-            self.df_[scol] = ldf[col].astype(float)
+            scol = scn(col)
+            self.df_[scol] = ldf[scol].astype(float)
 
         for col in self.discrete_columns:
-            scol = sanitize_column_name(col)
-            if pd.isnull(ldf[col]).any():
-                self.df_[scol] = ldf[col].astype(float)
+            scol = scn(col)
+            if pd.isnull(ldf[scol]).any():
+                self.df_[scol] = ldf[scol].astype(float)
             else:
-                self.df_[scol] = ldf[col].astype(int)
-
-        for col, na_symbol in self.null_to_NA_columns:
-            scol = sanitize_column_name(col)
-            self.df_.loc[pd.isnull(self.df_[scol]), [scol]] = na_symbol
-
-        if self.levels_as_strings:
-            self.df_ = convert_categories_to_string_categories(self.df_)
+                self.df_[scol] = ldf[scol].astype(int)
 
         return self
 
     def transform(self, X):
-        # if self.has_y:
-        #     return self.df_.iloc[:,:-1]
-        # else:
-        #     return self.df_
-        return self.df_
+        if self.has_y:
+            self.metadata['y_'] = self.df_.iloc[:,-1]
+            return self.df_.iloc[:,:-1]
+        else:
+            return self.df_
+
+class NullToNATransformer(sklearn.base.BaseEstimator, sklearn.base.TransformerMixin):
+
+    def __init__(self, null_to_NA_columns=[], metadata={}):
+        self.null_to_NA_columns          = null_to_NA_columns
+        self.metadata                    = metadata
+
+    def fit(self, X, y=None):
+        self.has_y = False
+
+        self.df = X.copy()
+        self.df_ = sklearn_fit_helper_transform_X(X, sanitize_column_names_p=True)
+
+        if 'y_' in self.metadata:
+            y = self.metadata['y_']
+
+        if y is not None:
+            self.has_y = True
+            self.df = pd.concat([self.df, y], axis=1)
+            y = sklearn_fit_helper_transform_y(y, sanitize_column_names_p=True)
+            self.df_[y.name] = y
+
+        scn = lambda x: x
+        if 'sanitized_column_name_mapping' in self.metadata:
+            scn = lambda x: self.metadata['sanitized_column_name_mapping'][x]
+
+        for col, na_symbol in self.null_to_NA_columns:
+            scol = scn(col)
+            self.df_.loc[pd.isnull(self.df_[scol]), [scol]] = na_symbol
+
+        return self
+
+    def transform(self, X):
+        if self.has_y:
+            self.metadata['y_'] = self.df_.iloc[:,-1]
+            return self.df_.iloc[:,:-1]
+        else:
+            return self.df_
+
+class CategoryLevelsAsStringsTransformer(sklearn.base.BaseEstimator, sklearn.base.TransformerMixin):
+
+    def __init__(self, null_to_NA_columns=[], metadata={}):
+        self.null_to_NA_columns          = null_to_NA_columns
+        self.metadata                    = metadata
+
+    def fit(self, X, y=None):
+        self.has_y = False
+
+        self.df = X.copy()
+        self.df_ = sklearn_fit_helper_transform_X(X, sanitize_column_names_p=True)
+
+        if 'y_' in self.metadata:
+            y = self.metadata['y_']
+
+        if y is not None:
+            self.has_y = True
+            self.df = pd.concat([self.df, y], axis=1)
+            y = sklearn_fit_helper_transform_y(y, sanitize_column_names_p=True)
+            self.df_[y.name] = y
+
+        self.df_ = convert_categories_to_string_categories(self.df_)
+
+        return self
+
+    def transform(self, X):
+        if self.has_y:
+            self.metadata['y_'] = self.df_.iloc[:,-1]
+            return self.df_.iloc[:,:-1]
+        else:
+            return self.df_

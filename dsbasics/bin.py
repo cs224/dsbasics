@@ -16,7 +16,7 @@ import numpy as np, pandas as pd, sklearn.base, matplotlib.pyplot as plt
 from sklearn.utils import check_array
 from sklearn.utils.validation import check_is_fitted
 import sklearn.tree
-import warnings
+import warnings, re
 
 
 class FitnessFunc(object):
@@ -669,3 +669,196 @@ class TargetVariableDecisionTreeBinTransformer(BaseBinTransformer):
                 r.iloc[:,i] = pd.cut(X.iloc[:,i].cat.codes.values, bin_boundaries, labels=bin_labels, right=False)
 
         return r
+
+def validate_node_or_level_name(name):
+    if re.match(r'[A-Za-z][A-Za-z0-9_]*', name) is None:
+        raise RuntimeError('You should only use node and/or factor level names that match the regex [A-Za-z][A-Za-z0-9_]*. You used: {}'.format(name))
+
+def validate_node_or_level_names(name_list):
+    for name in name_list:
+        validate_node_or_level_name(name)
+
+def sklearn_fit_helper_transform_X(X, sanitize_column_names_p=False):
+    if isinstance(X, pd.DataFrame):
+        ldf = X.copy()
+    elif isinstance(X, np.ndarray):
+        column_names = ['X{}'.format(i) for i in range(X.shape[1])]
+        ldf = pd.DataFrame(X, columns=column_names)
+    else:
+        raise ValueError('Only accepting pandas dataframe or np.ndarray as input')
+
+    if sanitize_column_names_p:
+        ldf.columns = sanitize_column_names(ldf.columns)
+
+    validate_node_or_level_names(ldf.columns)
+
+    # check_array(ldf)
+    if len(ldf.shape) != 2:
+        raise RuntimeError("X has invalid shape!")
+    return ldf
+
+def sklearn_fit_helper_transform_y(y, sanitize_column_names_p=False):
+    lds = None
+    # if isinstance(l,(list,pd.core.series.Series,np.ndarray)):
+    if isinstance(y, pd.Series):
+        lds = y.copy()
+    elif isinstance(y, np.ndarray):
+        lds = pd.Series(y, name='y')
+    else:
+        raise ValueError('Only accepting pandas series or np.ndarray as input')
+
+    if sanitize_column_names_p:
+        lds.name = sanitize_column_name(lds.name)
+
+    validate_node_or_level_names([lds.name])
+
+    # check_array(ldf)
+    if len(lds.shape) != 1:
+        raise RuntimeError("y has invalid shape!")
+    return lds
+
+
+def discrete_and_continuous_variables_with_and_without_nulls(ldf, cutoff=30):
+    discrete_non_null = []
+    discrete_with_null = []
+    continuous_non_null = []
+    continuous_with_null = []
+    levels_map = dict()
+    for col in ldf.columns:
+        uq = ldf[col].unique()
+        number_type = False
+        if all([np.issubdtype(type(level), np.number) for level in uq]):
+            number_type = True
+
+        if len(uq) > cutoff:
+            if pd.isnull(uq).any():
+                continuous_with_null += [col]
+            else:
+                continuous_non_null += [col]
+        else:
+            if pd.isnull(uq).any():
+                discrete_with_null += [col]
+                if number_type:
+                    levels_map[col] = sorted(list(set(uq) - set([np.nan])))
+                else:
+                    levels_map[col] = set(uq)  - set([np.nan])
+            else:
+                discrete_non_null += [col]
+                if number_type:
+                    levels_map[col] = sorted(list(uq))
+                else:
+                    levels_map[col] = list(uq)
+
+    return discrete_non_null, discrete_with_null, continuous_non_null, continuous_with_null, levels_map
+
+def sanitize_column_name(name):
+    r = '{}'.format(name).replace(' ', '_').replace('(', '').replace(')', '').replace('/', '_')
+    if re.match(r'^[A-Za-z].*', r) is None:
+        r = 'X{}'.format(r)
+    return r
+
+
+def sanitize_column_names(seq):
+    r = [sanitize_column_name(e) for e in seq]
+    return r
+
+def convert_categories_to_string_categories(ldf, inplace=True):
+    is_series = False
+    if isinstance(ldf, pd.Series):
+        ldf = pd.DataFrame(ldf, column=['y'])
+        is_series = True
+
+    if not inplace:
+        ldf = ldf.copy()
+
+    for column in ldf.columns:
+        if ldf[column].dtype.name != 'category':
+            continue
+        levels = ['' + str(cat) for cat in ldf[column].dtype.categories]
+        cdt = pd.api.types.CategoricalDtype(levels, ordered=True)
+        ldf.loc[:,column] = ldf[column].apply(lambda x: str(x)).astype(cdt)
+
+    if is_series:
+        return ldf.y
+    else:
+        return ldf
+
+class CategoricalTransformer(sklearn.base.BaseEstimator, sklearn.base.TransformerMixin):
+
+    def __init__(self, categorical_columns, ordered_categorical_columns, discrete_columns, continuous_columns, levels_map, null_to_NA_columns=[], sanitize_column_names=True, levels_as_strings=True):
+        self.categorical_columns         = categorical_columns
+        self.ordered_categorical_columns = ordered_categorical_columns
+        self.discrete_columns            = discrete_columns
+        self.continuous_columns          = continuous_columns
+        self.levels_map                  = levels_map
+        self.null_to_NA_columns          = null_to_NA_columns
+        self.sanitize_column_names       = sanitize_column_names
+        self.levels_as_strings           = levels_as_strings
+
+    def fit(self, X, y=None):
+        self.has_y = False
+
+        ldf = X.copy()
+        self.df_ = sklearn_fit_helper_transform_X(X, sanitize_column_names_p=self.sanitize_column_names)
+
+        if y is not None:
+            self.has_y = True
+            ldf = pd.concat([ldf, y], axis=1)
+            y = sklearn_fit_helper_transform_y(y, sanitize_column_names_p=self.sanitize_column_names)
+            self.df_[y.name] = y
+
+
+        discrete_non_null, discrete_with_null, continuous_non_null, continuous_with_null, derived_levels_map = discrete_and_continuous_variables_with_and_without_nulls(self.df_)
+
+        for col in self.categorical_columns:
+            scol = sanitize_column_name(col)
+            if col in self.levels_map:
+                levels = self.levels_map[col]
+            elif scol in derived_levels_map:
+                levels = derived_levels_map[scol]
+            else:
+                levels = None
+
+            if all([np.issubdtype(type(level), np.number) for level in levels]):
+                levels = sorted(levels)
+                self.df_[scol] = ldf[col].astype(pd.api.types.CategoricalDtype(levels, ordered=True))
+            else:
+                self.df_[scol] = ldf[col].astype(pd.api.types.CategoricalDtype(levels, ordered=False))
+
+        for col in self.ordered_categorical_columns:
+            scol = sanitize_column_name(col)
+            if col in self.levels_map:
+                levels = self.levels_map[col]
+            elif scol in derived_levels_map:
+                levels = derived_levels_map[scol]
+            else:
+                levels = None
+
+            self.df_[scol] = ldf[col].astype(pd.api.types.CategoricalDtype(levels, ordered=True))
+
+        for col in self.continuous_columns:
+            scol = sanitize_column_name(col)
+            self.df_[scol] = ldf[col].astype(float)
+
+        for col in self.discrete_columns:
+            scol = sanitize_column_name(col)
+            if pd.isnull(ldf[col]).any():
+                self.df_[scol] = ldf[col].astype(float)
+            else:
+                self.df_[scol] = ldf[col].astype(int)
+
+        for col, na_symbol in self.null_to_NA_columns:
+            scol = sanitize_column_name(col)
+            self.df_.loc[pd.isnull(self.df_[scol]), [scol]] = na_symbol
+
+        if self.levels_as_strings:
+            self.df_ = convert_categories_to_string_categories(self.df_)
+
+        return self
+
+    def transform(self, X):
+        # if self.has_y:
+        #     return self.df_.iloc[:,:-1]
+        # else:
+        #     return self.df_
+        return self.df_

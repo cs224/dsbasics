@@ -576,7 +576,7 @@ def category_code_intervals_to_category_enumeration_labels(catdtype, intervals):
     return labels
 
 
-class TargetVariableDecisionTreeBinTransformer(BaseBinTransformer):
+class TargetVariableDecisionTreeBinTransformer0(BaseBinTransformer):
 
     def __init__(self, max_leaf_nodes=None, max_depth=5, min_samples_leaf=5):
         if max_leaf_nodes is not None:
@@ -892,9 +892,21 @@ class CategoricalTransformer(MetaDataTransformerBase):
             else:
                 self.df_[scol] = self.df[scol].astype(int)
 
+class TargetVariableDecisionTreeBinTransformer(MetaDataTransformerBase):
+    def __init__(self, max_leaf_nodes=None, max_depth=5, min_samples_leaf=5, binning_variables=[], metadata={}):
+        super().__init__(metadata=metadata)
+        self.max_leaf_nodes    = max_leaf_nodes
+        self.max_depth         = max_depth
+        self.min_samples_leaf  = min_samples_leaf
+        self.binning_variables = binning_variables
+
+    def fit_with_metadata(self):
+        sbvs = [self.scn(bv) for bv in self.binning_variables]
+        tvbt = TargetVariableDecisionTreeBinTransformer0(max_leaf_nodes=self.max_leaf_nodes, max_depth=self.max_depth, min_samples_leaf=self.min_samples_leaf)
+        self.df_.loc[:, sbvs] = tvbt.fit_transform(self.df_[sbvs], self.y)
+
 
 class NullToNATransformer(MetaDataTransformerBase):
-
     def __init__(self, null_to_NA_columns=[], metadata={}):
         super().__init__(metadata=metadata)
         self.null_to_NA_columns          = null_to_NA_columns
@@ -906,7 +918,6 @@ class NullToNATransformer(MetaDataTransformerBase):
 
 
 class CategoryLevelsAsStringsTransformer(MetaDataTransformerBase):
-
     def __init__(self, metadata={}):
         super().__init__(metadata=metadata)
 

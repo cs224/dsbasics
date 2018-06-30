@@ -785,41 +785,24 @@ def convert_categories_to_string_categories(ldf, inplace=True):
 
 class MetaDataInitTransformer(sklearn.base.BaseEstimator, sklearn.base.TransformerMixin):
 
-    def __init__(self, metadata={}):
-        self.metadata = metadata
+    def __init__(self, metadata, sanitize_column_names_p=True):
+        self.metadata                = metadata
+        self.sanitize_column_names_p = sanitize_column_names_p
 
     def fit(self, X=None, y=None):
         self.metadata.clear()
-        return self
-
-    def transform(self, X):
-        return X
-
-class MetaDataTransformerBase(sklearn.base.BaseEstimator, sklearn.base.TransformerMixin):
-    def __init__(self, metadata={}):
-        self.metadata = metadata
-
-    def fit(self, X=None, y=None, sanitize_column_names_p=False):
-        self.has_y = False
 
         self.df = X.copy()
-        self.df_ = sklearn_fit_helper_transform_X(X, sanitize_column_names_p=sanitize_column_names_p)
-
-        if 'y_' in self.metadata:
-            y = self.metadata['y_']
+        self.df_ = sklearn_fit_helper_transform_X(X, sanitize_column_names_p=self.sanitize_column_names_p)
 
         if y is not None:
             self.has_y = True
             self.df = pd.concat([self.df, y], axis=1)
-            self.y = sklearn_fit_helper_transform_y(y, sanitize_column_names_p=sanitize_column_names_p)
+            self.y = sklearn_fit_helper_transform_y(y, sanitize_column_names_p=self.sanitize_column_names_p)
             self.df_[self.y.name] = self.y
+            self.metadata['y_']   = self.y
 
-        self.scn = lambda x: x
-        if 'sanitized_column_name_mapping' in self.metadata:
-            self.scn = lambda x: self.metadata['sanitized_column_name_mapping'][x]
-
-        self.fit_with_metadata()
-
+        self.metadata['sanitized_column_name_mapping'] = dict(zip(self.df.columns, self.df_.columns))
 
         return self
 
@@ -829,17 +812,40 @@ class MetaDataTransformerBase(sklearn.base.BaseEstimator, sklearn.base.Transform
         else:
             return self.df_
 
-class ColumnNameSanitzerTransformer(MetaDataTransformerBase):
-
+class MetaDataTransformerBase(sklearn.base.BaseEstimator, sklearn.base.TransformerMixin):
     def __init__(self, metadata={}):
-        super().__init__(metadata=metadata)
+        self.metadata = metadata
 
-    def fit(self, X=None, y=None):
-        return super().fit(X = X, y = y, sanitize_column_names_p=True)
+    def fit(self, X=None, y=None, sanitize_column_names_p=False):
+        self.has_y = False
 
-    def fit_with_metadata(self):
-        self.metadata['sanitized_column_name_mapping'] = dict(zip(self.df.columns, self.df_.columns))
+        self.df = X.copy()
 
+        if 'y_' in self.metadata:
+            y = self.metadata['y_']
+
+        if y is not None:
+            self.has_y = True
+            self.df = pd.concat([self.df, y], axis=1)
+            self.y = y
+
+        self.scn = lambda x: x
+        if 'sanitized_column_name_mapping' in self.metadata:
+            self.scn = lambda x: self.metadata['sanitized_column_name_mapping'][x]
+
+        self.fit_with_metadata()
+
+        if self.has_y:
+            self.metadata['y_'] = self.df.iloc[:,-1]
+
+
+        return self
+
+    def transform(self, X):
+        if self.has_y:
+            return self.df.iloc[:,:-1]
+        else:
+            return self.df
 
 
 class CategoricalTransformer(MetaDataTransformerBase):
@@ -853,10 +859,13 @@ class CategoricalTransformer(MetaDataTransformerBase):
         self.levels_map                  = levels_map
 
     def fit_with_metadata(self):
-        discrete_non_null, discrete_with_null, continuous_non_null, continuous_with_null, derived_levels_map = discrete_and_continuous_variables_with_and_without_nulls(self.df_)
+        discrete_non_null, discrete_with_null, continuous_non_null, continuous_with_null, derived_levels_map = discrete_and_continuous_variables_with_and_without_nulls(self.df)
 
         for col in self.categorical_columns:
             scol = self.scn(col)
+            if scol not in list(self.df.columns):
+                raise RuntimeError('You specified col: {} as one of the categorical_columns, but scol: {} does not exist in data frame columns: {}'.format(col, scol, list(self.df.columns)))
+
             if col in self.levels_map:
                 levels = self.levels_map[col]
             elif scol in derived_levels_map:
@@ -866,12 +875,15 @@ class CategoricalTransformer(MetaDataTransformerBase):
 
             if all([np.issubdtype(type(level), np.number) for level in levels]):
                 levels = sorted(levels)
-                self.df_[scol] = self.df[scol].astype(pd.api.types.CategoricalDtype(levels, ordered=True))
+                self.df[scol] = self.df[scol].astype(pd.api.types.CategoricalDtype(levels, ordered=True))
             else:
-                self.df_[scol] = self.df[scol].astype(pd.api.types.CategoricalDtype(levels, ordered=False))
+                self.df[scol] = self.df[scol].astype(pd.api.types.CategoricalDtype(levels, ordered=False))
 
         for col in self.ordered_categorical_columns:
             scol = self.scn(col)
+            if scol not in list(self.df.columns):
+                raise RuntimeError('You specified col: {} as one of the ordered_categorical_columns, but scol: {} does not exist in data frame columns: {}'.format(col, scol, list(self.df.columns)))
+
             if col in self.levels_map:
                 levels = self.levels_map[col]
             elif scol in derived_levels_map:
@@ -879,18 +891,23 @@ class CategoricalTransformer(MetaDataTransformerBase):
             else:
                 levels = None
 
-            self.df_[scol] = self.df[scol].astype(pd.api.types.CategoricalDtype(levels, ordered=True))
+            self.df[scol] = self.df[scol].astype(pd.api.types.CategoricalDtype(levels, ordered=True))
 
         for col in self.continuous_columns:
             scol = self.scn(col)
-            self.df_[scol] = self.df[scol].astype(float)
+            if scol not in list(self.df.columns):
+                raise RuntimeError('You specified col: {} as one of the continuous_columns, but scol: {} does not exist in data frame columns: {}'.format(col, scol, list(self.df.columns)))
+
+            self.df[scol] = self.df[scol].astype(float)
 
         for col in self.discrete_columns:
             scol = self.scn(col)
+            if scol not in list(self.df.columns):
+                raise RuntimeError('You specified col: {} as one of the discrete_columns, but scol: {} does not exist in data frame columns: {}'.format(col, scol, list(self.df.columns)))
             if pd.isnull(self.df[scol]).any():
-                self.df_[scol] = self.df[scol].astype(float)
+                self.df[scol] = self.df[scol].astype(float)
             else:
-                self.df_[scol] = self.df[scol].astype(int)
+                self.df[scol] = self.df[scol].astype(int)
 
 class TargetVariableDecisionTreeBinTransformer(MetaDataTransformerBase):
     def __init__(self, max_leaf_nodes=None, max_depth=5, min_samples_leaf=5, binning_variables=[], metadata={}):
@@ -903,7 +920,7 @@ class TargetVariableDecisionTreeBinTransformer(MetaDataTransformerBase):
     def fit_with_metadata(self):
         sbvs = [self.scn(bv) for bv in self.binning_variables]
         tvbt = TargetVariableDecisionTreeBinTransformer0(max_leaf_nodes=self.max_leaf_nodes, max_depth=self.max_depth, min_samples_leaf=self.min_samples_leaf)
-        self.df_.loc[:, sbvs] = tvbt.fit_transform(self.df_[sbvs], self.y)
+        self.df.loc[:, sbvs] = tvbt.fit_transform(self.df[sbvs], self.y)
 
 
 class NullToNATransformer(MetaDataTransformerBase):
@@ -914,7 +931,7 @@ class NullToNATransformer(MetaDataTransformerBase):
     def fit_with_metadata(self):
         for col, na_symbol in self.null_to_NA_columns:
             scol = self.scn(col)
-            self.df_.loc[pd.isnull(self.df_[scol]), [scol]] = na_symbol
+            self.df.loc[pd.isnull(self.df[scol]), [scol]] = na_symbol
 
 
 class CategoryLevelsAsStringsTransformer(MetaDataTransformerBase):
@@ -922,4 +939,49 @@ class CategoryLevelsAsStringsTransformer(MetaDataTransformerBase):
         super().__init__(metadata=metadata)
 
     def fit_with_metadata(self):
-        self.df_ = convert_categories_to_string_categories(self.df_)
+        self.df = convert_categories_to_string_categories(self.df)
+
+class PandasCutBinTransformer(MetaDataTransformerBase):
+    def __init__(self, boundaries_map, right=False, derive_start_and_end=True, metadata={}):
+        super().__init__(metadata=metadata)
+        self.boundaries_map = boundaries_map
+        self.right = right
+        self.derive_start_and_end = derive_start_and_end
+
+    def fit_with_metadata(self):
+        dec_left = 0
+        inc_right = 0
+        if self.right:
+            dec_left = 1
+        else:
+            inc_right = 1
+        for col, boundaries in self.boundaries_map.items():
+            lds = self.df[col]
+            if self.derive_start_and_end:
+                boundaries = [lds.min() - dec_left] + boundaries + [lds.max() + inc_right]
+
+            self.df[col] = pd.cut(self.df[col], boundaries, right=self.right)
+
+class FilterNullTransformer(MetaDataTransformerBase):
+    def __init__(self, metadata={}):
+        super().__init__(metadata=metadata)
+
+    def fit_with_metadata(self):
+        _, discrete_with_null, _, continuous_with_null, _ = discrete_and_continuous_variables_with_and_without_nulls(self.df)
+        null_fields = discrete_with_null + continuous_with_null
+        self.null_fields = null_fields
+        null_index = np.full(len(self.df), False)
+        for col in null_fields:
+            null_index |= pd.isnull(self.df[col])
+        self.null_index = null_index
+
+        self.df = self.df[~null_index]
+
+class DropColumnTransformer(MetaDataTransformerBase):
+    def __init__(self, columns, metadata={}):
+        super().__init__(metadata=metadata)
+        self.columns = columns
+
+    def fit_with_metadata(self):
+        for col in self.columns:
+            self.df.drop(col, axis=1, inplace=True)

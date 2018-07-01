@@ -788,8 +788,12 @@ class MetaDataInitTransformer(sklearn.base.BaseEstimator, sklearn.base.Transform
     def __init__(self, metadata, sanitize_column_names_p=True):
         self.metadata                = metadata
         self.sanitize_column_names_p = sanitize_column_names_p
+        self.fit_count       = 0
+        self.transform_count = 0
 
     def fit(self, X=None, y=None):
+        print('{}: fit, fit_count: {}, transform_count: {}'.format(type(self).__name__, self.fit_count, self.transform_count))
+        self.fit_count += 1
         self.metadata.clear()
 
         self.df = X.copy()
@@ -807,27 +811,43 @@ class MetaDataInitTransformer(sklearn.base.BaseEstimator, sklearn.base.Transform
         return self
 
     def transform(self, X):
-        if self.has_y:
-            return self.df_.iloc[:,:-1]
-        else:
-            return self.df_
+        print('{}: transform, fit_count: {}, transform_count: {}'.format(type(self).__name__, self.fit_count, self.transform_count))
+        if self.transform_count  < self.fit_count:
+            self.transform_count += 1
+        return sklearn_fit_helper_transform_X(X, sanitize_column_names_p=self.sanitize_column_names_p)
+
+
 
 class MetaDataTransformerBase(sklearn.base.BaseEstimator, sklearn.base.TransformerMixin):
     def __init__(self, metadata={}):
         self.metadata = metadata
+        self.fit_count       = 0
+        self.transform_count = 0
 
-    def fit(self, X=None, y=None, sanitize_column_names_p=False):
-        self.has_y = False
+    def extract_X_and_y(self, X=None, y=None):
+        has_y = False
 
-        self.df = X.copy()
+        df = X.copy()
 
+        y_untransformed = y
         if 'y_' in self.metadata:
             y = self.metadata['y_']
 
         if y is not None:
-            self.has_y = True
-            self.df = pd.concat([self.df, y], axis=1)
-            self.y = y
+            has_y = True
+            df = pd.concat([df, y], axis=1)
+
+        return has_y, df, y_untransformed, y
+
+
+    def fit(self, X=None, y=None, sanitize_column_names_p=False):
+        print('{}: fit, fit_count: {}, transform_count: {}'.format(type(self).__name__, self.fit_count, self.transform_count))
+        self.fit_count += 1
+        has_y, df, y_untransformed, y = self.extract_X_and_y(X, y)
+        self.has_y           = has_y
+        self.df              = df
+        self.y_untransformed = y_untransformed
+        self.y               = y
 
         self.scn = lambda x: x
         if 'sanitized_column_name_mapping' in self.metadata:
@@ -842,10 +862,15 @@ class MetaDataTransformerBase(sklearn.base.BaseEstimator, sklearn.base.Transform
         return self
 
     def transform(self, X):
-        if self.has_y:
-            return self.df.iloc[:,:-1]
-        else:
-            return self.df
+        print('{}: transform, fit_count: {}, transform_count: {}'.format(type(self).__name__, self.fit_count, self.transform_count))
+        if self.transform_count  < self.fit_count:
+            self.transform_count += 1
+            if self.has_y:
+                return self.df.iloc[:,:-1]
+            else:
+                return self.df
+
+        return self.transform_with_metadata(X)
 
 
 class CategoricalTransformer(MetaDataTransformerBase):
@@ -859,55 +884,69 @@ class CategoricalTransformer(MetaDataTransformerBase):
         self.levels_map                  = levels_map
 
     def fit_with_metadata(self):
-        discrete_non_null, discrete_with_null, continuous_non_null, continuous_with_null, derived_levels_map = discrete_and_continuous_variables_with_and_without_nulls(self.df)
+        _, _, _, _, derived_levels_map = discrete_and_continuous_variables_with_and_without_nulls(self.df)
+        self.derived_levels_map = derived_levels_map
+        self.df = self.transform_with_metadata(self.df)
 
+    def transform_with_metadata(self, ldf):
         for col in self.categorical_columns:
             scol = self.scn(col)
-            if scol not in list(self.df.columns):
-                raise RuntimeError('You specified col: {} as one of the categorical_columns, but scol: {} does not exist in data frame columns: {}'.format(col, scol, list(self.df.columns)))
+            if scol not in list(ldf.columns):
+                if scol == self.y.name:
+                    continue
+                raise RuntimeError('You specified col: {} as one of the categorical_columns, but scol: {} does not exist in data frame columns: {}'.format(col, scol, list(ldf.columns)))
 
             if col in self.levels_map:
                 levels = self.levels_map[col]
-            elif scol in derived_levels_map:
-                levels = derived_levels_map[scol]
+            elif scol in self.derived_levels_map:
+                levels = self.derived_levels_map[scol]
             else:
                 levels = None
 
             if all([np.issubdtype(type(level), np.number) for level in levels]):
                 levels = sorted(levels)
-                self.df[scol] = self.df[scol].astype(pd.api.types.CategoricalDtype(levels, ordered=True))
+                ldf[scol] = ldf[scol].astype(pd.api.types.CategoricalDtype(levels, ordered=True))
             else:
-                self.df[scol] = self.df[scol].astype(pd.api.types.CategoricalDtype(levels, ordered=False))
+                ldf[scol] = ldf[scol].astype(pd.api.types.CategoricalDtype(levels, ordered=False))
 
         for col in self.ordered_categorical_columns:
             scol = self.scn(col)
-            if scol not in list(self.df.columns):
-                raise RuntimeError('You specified col: {} as one of the ordered_categorical_columns, but scol: {} does not exist in data frame columns: {}'.format(col, scol, list(self.df.columns)))
+            if scol not in list(ldf.columns):
+                if scol == self.y.name:
+                    continue
+                raise RuntimeError('You specified col: {} as one of the ordered_categorical_columns, but scol: {} does not exist in data frame columns: {}'.format(col, scol, list(ldf.columns)))
 
             if col in self.levels_map:
                 levels = self.levels_map[col]
-            elif scol in derived_levels_map:
-                levels = derived_levels_map[scol]
+            elif scol in self.derived_levels_map:
+                levels = self.derived_levels_map[scol]
             else:
                 levels = None
 
-            self.df[scol] = self.df[scol].astype(pd.api.types.CategoricalDtype(levels, ordered=True))
+            ldf[scol] = ldf[scol].astype(pd.api.types.CategoricalDtype(levels, ordered=True))
 
         for col in self.continuous_columns:
             scol = self.scn(col)
-            if scol not in list(self.df.columns):
-                raise RuntimeError('You specified col: {} as one of the continuous_columns, but scol: {} does not exist in data frame columns: {}'.format(col, scol, list(self.df.columns)))
+            if scol not in list(ldf.columns):
+                if scol == self.y.name:
+                    continue
+                raise RuntimeError('You specified col: {} as one of the continuous_columns, but scol: {} does not exist in data frame columns: {}'.format(col, scol, list(ldf.columns)))
 
-            self.df[scol] = self.df[scol].astype(float)
+            ldf[scol] = ldf[scol].astype(float)
 
         for col in self.discrete_columns:
             scol = self.scn(col)
-            if scol not in list(self.df.columns):
-                raise RuntimeError('You specified col: {} as one of the discrete_columns, but scol: {} does not exist in data frame columns: {}'.format(col, scol, list(self.df.columns)))
+            if scol not in list(ldf.columns):
+                if scol == self.y.name:
+                    continue
+                raise RuntimeError('You specified col: {} as one of the discrete_columns, but scol: {} does not exist in data frame columns: {}'.format(col, scol, list(ldf.columns)))
             if pd.isnull(self.df[scol]).any():
-                self.df[scol] = self.df[scol].astype(float)
+                ldf[scol] = ldf[scol].astype(float)
             else:
-                self.df[scol] = self.df[scol].astype(int)
+                ldf[scol] = ldf[scol].astype(int)
+
+        return ldf
+
 
 class TargetVariableDecisionTreeBinTransformer(MetaDataTransformerBase):
     def __init__(self, max_leaf_nodes=None, max_depth=5, min_samples_leaf=5, binning_variables=[], metadata={}):
@@ -919,8 +958,15 @@ class TargetVariableDecisionTreeBinTransformer(MetaDataTransformerBase):
 
     def fit_with_metadata(self):
         sbvs = [self.scn(bv) for bv in self.binning_variables]
-        tvbt = TargetVariableDecisionTreeBinTransformer0(max_leaf_nodes=self.max_leaf_nodes, max_depth=self.max_depth, min_samples_leaf=self.min_samples_leaf)
-        self.df.loc[:, sbvs] = tvbt.fit_transform(self.df[sbvs], self.y)
+        self.tvbt = TargetVariableDecisionTreeBinTransformer0(max_leaf_nodes=self.max_leaf_nodes, max_depth=self.max_depth, min_samples_leaf=self.min_samples_leaf)
+        self.tvbt.fit(self.df[sbvs], self.y)
+        self.df.loc[:, sbvs] = self.transform_with_metadata(self.df)
+
+
+    def transform_with_metadata(self, ldf):
+        sbvs = [self.scn(bv) for bv in self.binning_variables]
+        ldf.loc[:, sbvs] = self.tvbt.transform(ldf[sbvs])
+        return ldf
 
 
 class NullToNATransformer(MetaDataTransformerBase):
@@ -929,9 +975,13 @@ class NullToNATransformer(MetaDataTransformerBase):
         self.null_to_NA_columns          = null_to_NA_columns
 
     def fit_with_metadata(self):
+        self.df = self.transform_with_metadata(self.df)
+
+    def transform_with_metadata(self, ldf):
         for col, na_symbol in self.null_to_NA_columns:
             scol = self.scn(col)
-            self.df.loc[pd.isnull(self.df[scol]), [scol]] = na_symbol
+            ldf.loc[pd.isnull(ldf[scol]), [scol]] = na_symbol
+        return ldf
 
 
 class CategoryLevelsAsStringsTransformer(MetaDataTransformerBase):
@@ -939,7 +989,11 @@ class CategoryLevelsAsStringsTransformer(MetaDataTransformerBase):
         super().__init__(metadata=metadata)
 
     def fit_with_metadata(self):
-        self.df = convert_categories_to_string_categories(self.df)
+        self.df = self.transform_with_metadata(self.df)
+
+    def transform_with_metadata(self, ldf):
+        return convert_categories_to_string_categories(ldf)
+
 
 class PandasCutBinTransformer(MetaDataTransformerBase):
     def __init__(self, boundaries_map, right=False, derive_start_and_end=True, metadata={}):
@@ -949,18 +1003,30 @@ class PandasCutBinTransformer(MetaDataTransformerBase):
         self.derive_start_and_end = derive_start_and_end
 
     def fit_with_metadata(self):
+        self.df = self.transform_with_metadata(self.df)
+
+    def transform_with_metadata(self, ldf):
         dec_left = 0
         inc_right = 0
         if self.right:
             dec_left = 1
         else:
             inc_right = 1
+
         for col, boundaries in self.boundaries_map.items():
-            lds = self.df[col]
+            scol = self.scn(col)
+            if scol not in list(ldf.columns):
+                if scol == self.y.name:
+                    continue
+                raise RuntimeError('You specified col: {} as one of the boundaries, but scol: {} does not exist in data frame columns: {}'.format(col, scol, list(ldf.columns)))
+
+            lds = ldf[scol]
             if self.derive_start_and_end:
                 boundaries = [lds.min() - dec_left] + boundaries + [lds.max() + inc_right]
 
-            self.df[col] = pd.cut(self.df[col], boundaries, right=self.right)
+            ldf[scol] = pd.cut(lds, boundaries, right=self.right)
+        return ldf
+
 
 class FilterNullTransformer(MetaDataTransformerBase):
     def __init__(self, metadata={}):
@@ -977,11 +1043,62 @@ class FilterNullTransformer(MetaDataTransformerBase):
 
         self.df = self.df[~null_index]
 
+    def transform_with_metadata(self, ldf):
+        _, discrete_with_null, _, continuous_with_null, _ = discrete_and_continuous_variables_with_and_without_nulls(ldf)
+        null_fields = discrete_with_null + continuous_with_null
+        null_index = np.full(len(ldf), False)
+        for col in null_fields:
+            null_index |= pd.isnull(ldf[col])
+
+        return ldf[~null_index].copy()
+
+
 class DropColumnTransformer(MetaDataTransformerBase):
     def __init__(self, columns, metadata={}):
         super().__init__(metadata=metadata)
         self.columns = columns
 
     def fit_with_metadata(self):
+        self.df = self.transform_with_metadata(self.df)
+
+    def transform_with_metadata(self, ldf):
         for col in self.columns:
-            self.df.drop(col, axis=1, inplace=True)
+            ldf.drop(col, axis=1, inplace=True)
+        return ldf
+
+class MetaDataTransformerClassifierOrRegressorWrapper(MetaDataTransformerBase, sklearn.base.RegressorMixin):
+    def __init__(self, base_classifier, metadata={}):
+        super().__init__(metadata=metadata)
+        self.base_classifier = base_classifier
+
+    def fit_with_metadata(self):
+        self.base_classifier.fit(self.df.iloc[:,:-1], self.df.iloc[:,-1])
+
+    def predict(self, X):
+        return self.base_classifier.predict(X)
+
+
+class ClassifierToRegressorHelper(MetaDataTransformerBase, sklearn.base.RegressorMixin):
+    def __init__(self, base_classifier, metadata={}):
+        super().__init__(metadata=metadata)
+        self.base_classifier = base_classifier
+
+    def fit_with_metadata(self):
+        self.base_classifier.fit(self.df.iloc[:,:-1], self.df.iloc[:,-1])
+
+        y_untransformed = self.y_untransformed.loc[self.y.index]
+        self.category_to_mean_mapping = y_untransformed.groupby(self.y).mean()
+        # self.category_to_mean_mapping_dict = dict(zip(self.category_to_mean_mapping.index, self.category_to_mean_mapping.values))
+
+    def predict(self, X):
+        labels = self.base_classifier.predict(X)
+        if not isinstance(labels, pd.Series):
+            labels = pd.Series(labels)
+
+        return labels.map(self.category_to_mean_mapping)
+
+    def score(self, X, y, sample_weight=None):
+        y_ = y.loc[X.index]
+        return super().score(X, y_, sample_weight=sample_weight)
+        # from sklearn.metrics import r2_score
+        # return r2_score(y_, self.predict(X), sample_weight=sample_weight, multioutput='variance_weighted')

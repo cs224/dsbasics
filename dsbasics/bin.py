@@ -726,6 +726,9 @@ def discrete_and_continuous_variables_with_and_without_nulls(ldf, cutoff=30):
     levels_map = dict()
     for col in ldf.columns:
         uq = ldf[col].unique()
+        # if col == 'Overall_Qual':
+        #     print('Overall Qual')
+        #     print(uq)
         number_type = False
         if all([np.issubdtype(type(level), np.number) for level in uq]):
             number_type = True
@@ -783,6 +786,12 @@ def convert_categories_to_string_categories(ldf, inplace=True):
     else:
         return ldf
 
+def index_compare(o1, o2):
+    if (o1 is None) or o2 is None:
+        return None
+    return set(o1.index) ^ set(o2.index)
+
+
 class MetaDataInitTransformer(sklearn.base.BaseEstimator, sklearn.base.TransformerMixin):
 
     def __init__(self, metadata, sanitize_column_names_p=True):
@@ -792,9 +801,10 @@ class MetaDataInitTransformer(sklearn.base.BaseEstimator, sklearn.base.Transform
         self.transform_count = 0
 
     def fit(self, X=None, y=None):
-        print('{}: fit, fit_count: {}, transform_count: {}'.format(type(self).__name__, self.fit_count, self.transform_count))
+        # print('{}: fit, fit_count: {}, transform_count: {}'.format(type(self).__name__, self.fit_count, self.transform_count))
         self.fit_count += 1
         self.metadata.clear()
+
 
         self.df = X.copy()
         self.df_ = sklearn_fit_helper_transform_X(X, sanitize_column_names_p=self.sanitize_column_names_p)
@@ -811,7 +821,7 @@ class MetaDataInitTransformer(sklearn.base.BaseEstimator, sklearn.base.Transform
         return self
 
     def transform(self, X):
-        print('{}: transform, fit_count: {}, transform_count: {}'.format(type(self).__name__, self.fit_count, self.transform_count))
+        # print('{}: transform, fit_count: {}, transform_count: {}'.format(type(self).__name__, self.fit_count, self.transform_count))
         if self.transform_count  < self.fit_count:
             self.transform_count += 1
         return sklearn_fit_helper_transform_X(X, sanitize_column_names_p=self.sanitize_column_names_p)
@@ -841,9 +851,11 @@ class MetaDataTransformerBase(sklearn.base.BaseEstimator, sklearn.base.Transform
 
 
     def fit(self, X=None, y=None, sanitize_column_names_p=False):
-        print('{}: fit, fit_count: {}, transform_count: {}'.format(type(self).__name__, self.fit_count, self.transform_count))
+        # print('{}: fit, fit_count: {}, transform_count: {}'.format(type(self).__name__, self.fit_count, self.transform_count))
         self.fit_count += 1
+        # print(X['Overall_Qual'].unique())
         has_y, df, y_untransformed, y = self.extract_X_and_y(X, y)
+        # print(df['Overall_Qual'].unique())
         self.has_y           = has_y
         self.df              = df
         self.y_untransformed = y_untransformed
@@ -862,7 +874,7 @@ class MetaDataTransformerBase(sklearn.base.BaseEstimator, sklearn.base.Transform
         return self
 
     def transform(self, X):
-        print('{}: transform, fit_count: {}, transform_count: {}'.format(type(self).__name__, self.fit_count, self.transform_count))
+        # print('{}: transform, fit_count: {}, transform_count: {}'.format(type(self).__name__, self.fit_count, self.transform_count))
         if self.transform_count  < self.fit_count:
             self.transform_count += 1
             if self.has_y:
@@ -1075,7 +1087,9 @@ class MetaDataTransformerClassifierOrRegressorWrapper(MetaDataTransformerBase, s
         self.base_classifier.fit(self.df.iloc[:,:-1], self.df.iloc[:,-1])
 
     def predict(self, X):
-        return self.base_classifier.predict(X)
+        y = self.base_classifier.predict(X)
+        y.index = X.index
+        return y
 
 
 class ClassifierToRegressorHelper(MetaDataTransformerBase, sklearn.base.RegressorMixin):
@@ -1095,10 +1109,13 @@ class ClassifierToRegressorHelper(MetaDataTransformerBase, sklearn.base.Regresso
         if not isinstance(labels, pd.Series):
             labels = pd.Series(labels)
 
-        return labels.map(self.category_to_mean_mapping)
+        y =  labels.map(self.category_to_mean_mapping)
+        y.index = X.index
+        return y
 
     def score(self, X, y, sample_weight=None):
         y_ = y.loc[X.index]
         return super().score(X, y_, sample_weight=sample_weight)
         # from sklearn.metrics import r2_score
         # return r2_score(y_, self.predict(X), sample_weight=sample_weight, multioutput='variance_weighted')
+

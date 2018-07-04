@@ -856,7 +856,7 @@ class MetaDataTransformerBase(sklearn.base.BaseEstimator, sklearn.base.Transform
 
         self.metadata = X.__dict__[global_MetaDataInitTransformer_metadata_key]
 
-        print(id(self.metadata))
+        # print(id(self.metadata))
         # print((id(self.metadata), self.metadata))
         # print('{}: fit, fit_count: {}, transform_count: {}'.format(type(self).__name__, self.fit_count, self.transform_count))
         self.fit_count += 1
@@ -968,10 +968,11 @@ class CategoricalTransformer(MetaDataTransformerBase):
                 if scol == self.y.name:
                     continue
                 raise RuntimeError('You specified col: {} as one of the discrete_columns, but scol: {} does not exist in data frame columns: {}'.format(col, scol, list(ldf.columns)))
-            if pd.isnull(self.df[scol]).any():
-                ldf[scol] = ldf[scol].astype(float)
-            else:
-                ldf[scol] = ldf[scol].astype(int)
+            ldf[scol] = ldf[scol].astype(float)
+            # if pd.isnull(ldf[scol]).any():
+            #     ldf[scol] = ldf[scol].astype(float)
+            # else:
+            #     ldf[scol] = ldf[scol].astype(int)
 
         return ldf
 

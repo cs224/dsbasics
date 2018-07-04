@@ -1101,7 +1101,7 @@ class ClassifierToRegressorHelper(MetaDataTransformerBase, sklearn.base.Regresso
         self.base_classifier.fit(self.df.iloc[:,:-1], self.df.iloc[:,-1])
 
         y_untransformed = self.y_untransformed.loc[self.y.index]
-        self.category_to_mean_mapping = y_untransformed.groupby(self.y).mean()
+        self.category_to_median_mapping = y_untransformed.groupby(self.y).median()
         # self.category_to_mean_mapping_dict = dict(zip(self.category_to_mean_mapping.index, self.category_to_mean_mapping.values))
 
     def predict(self, X):
@@ -1109,7 +1109,7 @@ class ClassifierToRegressorHelper(MetaDataTransformerBase, sklearn.base.Regresso
         if not isinstance(labels, pd.Series):
             labels = pd.Series(labels)
 
-        y =  labels.map(self.category_to_mean_mapping)
+        y =  labels.map(self.category_to_median_mapping)
         y.index = X.index
         return y
 

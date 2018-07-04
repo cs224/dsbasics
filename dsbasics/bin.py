@@ -791,6 +791,7 @@ def index_compare(o1, o2):
         return None
     return set(o1.index) ^ set(o2.index)
 
+global_MetaDataInitTransformer_init_marker = 'global_MetaDataInitTransformer_init_marker'
 
 class MetaDataInitTransformer(sklearn.base.BaseEstimator, sklearn.base.TransformerMixin):
 
@@ -804,6 +805,7 @@ class MetaDataInitTransformer(sklearn.base.BaseEstimator, sklearn.base.Transform
         # print('{}: fit, fit_count: {}, transform_count: {}'.format(type(self).__name__, self.fit_count, self.transform_count))
         self.fit_count += 1
         self.metadata.clear()
+        self.metadata[global_MetaDataInitTransformer_init_marker] = True
 
 
         self.df = X.copy()
@@ -830,6 +832,8 @@ class MetaDataInitTransformer(sklearn.base.BaseEstimator, sklearn.base.Transform
 
 class MetaDataTransformerBase(sklearn.base.BaseEstimator, sklearn.base.TransformerMixin):
     def __init__(self, metadata={}):
+        if list(metadata.keys()):
+            raise RuntimeError('This is nearly 100% a mistake that you provide metadata at construction time that is not empty.')
         self.metadata = metadata
         self.fit_count       = 0
         self.transform_count = 0
@@ -851,6 +855,8 @@ class MetaDataTransformerBase(sklearn.base.BaseEstimator, sklearn.base.Transform
 
 
     def fit(self, X=None, y=None, sanitize_column_names_p=False):
+        if not self.metadata[global_MetaDataInitTransformer_init_marker]:
+            raise RuntimeError('The pipeline metadata was not initialized. Check if you provided a metadata object at construction time and that the chain starts with a MetaDataInitTransformer!')
         # print('{}: fit, fit_count: {}, transform_count: {}'.format(type(self).__name__, self.fit_count, self.transform_count))
         self.fit_count += 1
         # print(X['Overall_Qual'].unique())

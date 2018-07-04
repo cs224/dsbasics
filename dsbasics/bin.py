@@ -741,16 +741,13 @@ def discrete_and_continuous_variables_with_and_without_nulls(ldf, cutoff=30):
         else:
             if pd.isnull(uq).any():
                 discrete_with_null += [col]
-                if number_type:
-                    levels_map[col] = sorted(list(set(uq) - set([np.nan])))
-                else:
-                    levels_map[col] = set(uq)  - set([np.nan])
+                uq = uq[~pd.isnull(uq)]
             else:
                 discrete_non_null += [col]
-                if number_type:
-                    levels_map[col] = sorted(list(uq))
-                else:
-                    levels_map[col] = list(uq)
+            if number_type:
+                levels_map[col] = sorted(list(uq))
+            else:
+                levels_map[col] = list(uq)
 
     return discrete_non_null, discrete_with_null, continuous_non_null, continuous_with_null, levels_map
 
@@ -832,8 +829,8 @@ class MetaDataInitTransformer(sklearn.base.BaseEstimator, sklearn.base.Transform
 
 class MetaDataTransformerBase(sklearn.base.BaseEstimator, sklearn.base.TransformerMixin):
     def __init__(self, metadata={}):
-        if list(metadata.keys()):
-            raise RuntimeError('This is nearly 100% a mistake that you provide metadata at construction time that is not empty.')
+        # if list(metadata.keys()):
+        #     raise RuntimeError('This is nearly 100% a mistake that you provide metadata at construction time that is not empty.')
         self.metadata = metadata
         self.fit_count       = 0
         self.transform_count = 0
@@ -857,6 +854,7 @@ class MetaDataTransformerBase(sklearn.base.BaseEstimator, sklearn.base.Transform
     def fit(self, X=None, y=None, sanitize_column_names_p=False):
         if not self.metadata[global_MetaDataInitTransformer_init_marker]:
             raise RuntimeError('The pipeline metadata was not initialized. Check if you provided a metadata object at construction time and that the chain starts with a MetaDataInitTransformer!')
+        print((id(self.metadata), self.metadata))
         # print('{}: fit, fit_count: {}, transform_count: {}'.format(type(self).__name__, self.fit_count, self.transform_count))
         self.fit_count += 1
         # print(X['Overall_Qual'].unique())
@@ -945,6 +943,7 @@ class CategoricalTransformer(MetaDataTransformerBase):
 
         for col in self.continuous_columns:
             scol = self.scn(col)
+            print((col,scol))
             if scol not in list(ldf.columns):
                 if scol == self.y.name:
                     continue

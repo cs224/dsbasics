@@ -788,12 +788,11 @@ def index_compare(o1, o2):
         return None
     return set(o1.index) ^ set(o2.index)
 
-global_MetaDataInitTransformer_init_marker = 'global_MetaDataInitTransformer_init_marker'
+global_MetaDataInitTransformer_metadata_key = 'dsbasics.mdit.metadata'
 
 class MetaDataInitTransformer(sklearn.base.BaseEstimator, sklearn.base.TransformerMixin):
 
-    def __init__(self, metadata, sanitize_column_names_p=True):
-        self.metadata                = metadata
+    def __init__(self, sanitize_column_names_p=True):
         self.sanitize_column_names_p = sanitize_column_names_p
         self.fit_count       = 0
         self.transform_count = 0
@@ -801,11 +800,11 @@ class MetaDataInitTransformer(sklearn.base.BaseEstimator, sklearn.base.Transform
     def fit(self, X=None, y=None):
         # print('{}: fit, fit_count: {}, transform_count: {}'.format(type(self).__name__, self.fit_count, self.transform_count))
         self.fit_count += 1
-        self.metadata.clear()
-        self.metadata[global_MetaDataInitTransformer_init_marker] = True
 
-
+        self.metadata = {}
         self.df = X.copy()
+        self.df.__dict__[global_MetaDataInitTransformer_metadata_key] = self.metadata
+
         self.df_ = sklearn_fit_helper_transform_X(X, sanitize_column_names_p=self.sanitize_column_names_p)
 
         if y is not None:
@@ -823,15 +822,15 @@ class MetaDataInitTransformer(sklearn.base.BaseEstimator, sklearn.base.Transform
         # print('{}: transform, fit_count: {}, transform_count: {}'.format(type(self).__name__, self.fit_count, self.transform_count))
         if self.transform_count  < self.fit_count:
             self.transform_count += 1
-        return sklearn_fit_helper_transform_X(X, sanitize_column_names_p=self.sanitize_column_names_p)
 
+        X_ = sklearn_fit_helper_transform_X(X, sanitize_column_names_p=self.sanitize_column_names_p)
+        X_.__dict__[global_MetaDataInitTransformer_metadata_key] = self.metadata
+
+        return X_
 
 
 class MetaDataTransformerBase(sklearn.base.BaseEstimator, sklearn.base.TransformerMixin):
-    def __init__(self, metadata={}):
-        # if list(metadata.keys()):
-        #     raise RuntimeError('This is nearly 100% a mistake that you provide metadata at construction time that is not empty.')
-        self.metadata = metadata
+    def __init__(self):
         self.fit_count       = 0
         self.transform_count = 0
 
@@ -852,14 +851,18 @@ class MetaDataTransformerBase(sklearn.base.BaseEstimator, sklearn.base.Transform
 
 
     def fit(self, X=None, y=None, sanitize_column_names_p=False):
-        if not self.metadata[global_MetaDataInitTransformer_init_marker]:
-            raise RuntimeError('The pipeline metadata was not initialized. Check if you provided a metadata object at construction time and that the chain starts with a MetaDataInitTransformer!')
-        print((id(self.metadata), self.metadata))
+        if not global_MetaDataInitTransformer_metadata_key in X.__dict__:
+            raise RuntimeError('The pipeline metadata was not initialized. Check that the chain starts with a MetaDataInitTransformer!')
+
+        self.metadata = X.__dict__[global_MetaDataInitTransformer_metadata_key]
+
+        print(id(self.metadata))
+        # print((id(self.metadata), self.metadata))
         # print('{}: fit, fit_count: {}, transform_count: {}'.format(type(self).__name__, self.fit_count, self.transform_count))
         self.fit_count += 1
-        # print(X['Overall_Qual'].unique())
+
         has_y, df, y_untransformed, y = self.extract_X_and_y(X, y)
-        # print(df['Overall_Qual'].unique())
+
         self.has_y           = has_y
         self.df              = df
         self.y_untransformed = y_untransformed
@@ -874,25 +877,33 @@ class MetaDataTransformerBase(sklearn.base.BaseEstimator, sklearn.base.Transform
         if self.has_y:
             self.metadata['y_'] = self.df.iloc[:,-1]
 
-
         return self
 
     def transform(self, X):
         # print('{}: transform, fit_count: {}, transform_count: {}'.format(type(self).__name__, self.fit_count, self.transform_count))
+        if not global_MetaDataInitTransformer_metadata_key in X.__dict__:
+            raise RuntimeError('The pipeline metadata was not initialized. Check that the chain starts with a MetaDataInitTransformer!')
+
+        self.metadata = X.__dict__[global_MetaDataInitTransformer_metadata_key]
+
         if self.transform_count  < self.fit_count:
             self.transform_count += 1
-            if self.has_y:
-                return self.df.iloc[:,:-1]
-            else:
-                return self.df
+            # if self.has_y:
+            #     return self.df.iloc[:,:-1]
+            # else:
+            #     return self.df
 
-        return self.transform_with_metadata(X)
+        X_ = self.transform_with_metadata(X)
+        # make sure that meta data stays available
+        X_.__dict__[global_MetaDataInitTransformer_metadata_key] = self.metadata
+
+        return X_
 
 
 class CategoricalTransformer(MetaDataTransformerBase):
 
-    def __init__(self, categorical_columns, ordered_categorical_columns, discrete_columns, continuous_columns, levels_map, metadata={}):
-        super().__init__(metadata=metadata)
+    def __init__(self, categorical_columns, ordered_categorical_columns, discrete_columns, continuous_columns, levels_map):
+        super().__init__()
         self.categorical_columns         = categorical_columns
         self.ordered_categorical_columns = ordered_categorical_columns
         self.discrete_columns            = discrete_columns
@@ -916,8 +927,9 @@ class CategoricalTransformer(MetaDataTransformerBase):
                 levels = self.levels_map[col]
             elif scol in self.derived_levels_map:
                 levels = self.derived_levels_map[scol]
+                raise RuntimeError('column: {} has no specified levels. Candidate levels are: {}. Consider using and/or extending this proposal as necessary.'.format(col, levels))
             else:
-                levels = None
+                raise RuntimeError('column: {} has no specified levels. You have to provide the levels for categorical columns'.format(col))
 
             if all([np.issubdtype(type(level), np.number) for level in levels]):
                 levels = sorted(levels)
@@ -943,7 +955,6 @@ class CategoricalTransformer(MetaDataTransformerBase):
 
         for col in self.continuous_columns:
             scol = self.scn(col)
-            print((col,scol))
             if scol not in list(ldf.columns):
                 if scol == self.y.name:
                     continue
@@ -966,8 +977,8 @@ class CategoricalTransformer(MetaDataTransformerBase):
 
 
 class TargetVariableDecisionTreeBinTransformer(MetaDataTransformerBase):
-    def __init__(self, max_leaf_nodes=None, max_depth=5, min_samples_leaf=5, binning_variables=[], metadata={}):
-        super().__init__(metadata=metadata)
+    def __init__(self, max_leaf_nodes=None, max_depth=5, min_samples_leaf=5, binning_variables=[]):
+        super().__init__()
         self.max_leaf_nodes    = max_leaf_nodes
         self.max_depth         = max_depth
         self.min_samples_leaf  = min_samples_leaf
@@ -987,8 +998,8 @@ class TargetVariableDecisionTreeBinTransformer(MetaDataTransformerBase):
 
 
 class NullToNATransformer(MetaDataTransformerBase):
-    def __init__(self, null_to_NA_columns=[], metadata={}):
-        super().__init__(metadata=metadata)
+    def __init__(self, null_to_NA_columns=[]):
+        super().__init__()
         self.null_to_NA_columns          = null_to_NA_columns
 
     def fit_with_metadata(self):
@@ -1002,8 +1013,8 @@ class NullToNATransformer(MetaDataTransformerBase):
 
 
 class CategoryLevelsAsStringsTransformer(MetaDataTransformerBase):
-    def __init__(self, metadata={}):
-        super().__init__(metadata=metadata)
+    def __init__(self):
+        super().__init__()
 
     def fit_with_metadata(self):
         self.df = self.transform_with_metadata(self.df)
@@ -1013,8 +1024,8 @@ class CategoryLevelsAsStringsTransformer(MetaDataTransformerBase):
 
 
 class PandasCutBinTransformer(MetaDataTransformerBase):
-    def __init__(self, boundaries_map, right=False, derive_start_and_end=True, metadata={}):
-        super().__init__(metadata=metadata)
+    def __init__(self, boundaries_map, right=False, derive_start_and_end=True):
+        super().__init__()
         self.boundaries_map = boundaries_map
         self.right = right
         self.derive_start_and_end = derive_start_and_end
@@ -1046,8 +1057,8 @@ class PandasCutBinTransformer(MetaDataTransformerBase):
 
 
 class FilterNullTransformer(MetaDataTransformerBase):
-    def __init__(self, metadata={}):
-        super().__init__(metadata=metadata)
+    def __init__(self):
+        super().__init__()
 
     def fit_with_metadata(self):
         _, discrete_with_null, _, continuous_with_null, _ = discrete_and_continuous_variables_with_and_without_nulls(self.df)
@@ -1071,8 +1082,8 @@ class FilterNullTransformer(MetaDataTransformerBase):
 
 
 class DropColumnTransformer(MetaDataTransformerBase):
-    def __init__(self, columns, metadata={}):
-        super().__init__(metadata=metadata)
+    def __init__(self, columns):
+        super().__init__()
         self.columns = columns
 
     def fit_with_metadata(self):
@@ -1084,8 +1095,8 @@ class DropColumnTransformer(MetaDataTransformerBase):
         return ldf
 
 class MetaDataTransformerClassifierOrRegressorWrapper(MetaDataTransformerBase, sklearn.base.RegressorMixin):
-    def __init__(self, base_classifier, metadata={}):
-        super().__init__(metadata=metadata)
+    def __init__(self, base_classifier):
+        super().__init__()
         self.base_classifier = base_classifier
 
     def fit_with_metadata(self):
@@ -1098,8 +1109,8 @@ class MetaDataTransformerClassifierOrRegressorWrapper(MetaDataTransformerBase, s
 
 
 class ClassifierToRegressorHelper(MetaDataTransformerBase, sklearn.base.RegressorMixin):
-    def __init__(self, base_classifier, metadata={}):
-        super().__init__(metadata=metadata)
+    def __init__(self, base_classifier):
+        super().__init__()
         self.base_classifier = base_classifier
 
     def fit_with_metadata(self):

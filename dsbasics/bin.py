@@ -616,8 +616,12 @@ class TargetVariableDecisionTreeBinTransformer0(BaseBinTransformer):
             x = x[not_null_index]
 
             iscategory = False
+            cdt = None
             if isinstance(x, pd.Series) and x.dtype.name == 'category':
                 iscategory = True
+                cdt = x.dtype
+                if not cdt.ordered:
+                    raise RuntimeError('The category for column: {} is not an ordered category! You can only use TargetVariableDecisionTreeBinTransformer with ordered categories.')
                 x = x.cat.codes.values
 
             dtr = None
@@ -632,11 +636,21 @@ class TargetVariableDecisionTreeBinTransformer0(BaseBinTransformer):
             dtr.fit(x.values.reshape(-1,1),y)
             thrs_out = np.unique(dtr.tree_.threshold[dtr.tree_.feature > -2])
             thrs_out = np.sort(thrs_out)
-            min = np.min(x).reshape(-1)
-            max = np.max(x).reshape(-1) + 1
+            # print((i, thrs_out))
+            if iscategory:
+                min = np.array([0])
+                max = np.array([len(cdt.categories) + 1])
+            else:
+                # min = np.min(x).reshape(-1)
+                # max = np.max(x).reshape(-1) + 1
+                min = np.array([-np.inf])
+                max = np.array([+np.inf])
+
             thrs_out = np.concatenate([min, thrs_out, max])
+            # thrs_out = np.sort(np.unique(thrs_out))
             bins_ += [thrs_out]
             # print(bins_)
+            # print((i, thrs_out))
             if iscategory:
                 labels_ += [category_code_intervals_to_category_enumeration_labels(self.X_.iloc[:,i].dtype, thrs_out)]
             else:

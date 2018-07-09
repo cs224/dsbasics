@@ -884,7 +884,7 @@ class MetaDataTransformerBase(sklearn.base.BaseEstimator, sklearn.base.Transform
 
         self.scn = lambda x: x
         if 'sanitized_column_name_mapping' in self.metadata:
-            self.scn = lambda x: self.metadata['sanitized_column_name_mapping'][x]
+            self.scn = lambda x: self.metadata['sanitized_column_name_mapping'].get(x, 'key not found in sanitized_column_name_mapping: {}'.format(x))
 
         self.fit_with_metadata()
 
@@ -1149,4 +1149,39 @@ class ClassifierToRegressorHelper(MetaDataTransformerBase, sklearn.base.Regresso
         return super().score(X, y_, sample_weight=sample_weight)
         # from sklearn.metrics import r2_score
         # return r2_score(y_, self.predict(X), sample_weight=sample_weight, multioutput='variance_weighted')
+
+
+class TreeRegressorAdapterTransformer(MetaDataTransformerBase):
+    def __init__(self, categorical_columns, ordered_categorical_columns, discrete_columns, continuous_columns):
+        super().__init__()
+        self.categorical_columns         = categorical_columns
+        self.ordered_categorical_columns = ordered_categorical_columns
+        self.discrete_columns            = discrete_columns
+        self.continuous_columns          = continuous_columns
+
+    def fit_with_metadata(self):
+        self.df = self.transform_with_metadata(self.df)
+
+    def transform_with_metadata(self, ldf):
+        s_categorical_columns         = [self.scn(e) for e in self.categorical_columns]
+        s_ordered_categorical_columns = [self.scn(e) for e in self.ordered_categorical_columns]
+        s_categorical_columns         = list(set(s_categorical_columns) - set(s_ordered_categorical_columns))
+
+        # s_discrete_columns = self.scn(self.discrete_columns)
+        # s_continuous_columns = self.scn(self.continuous_columns)
+
+        ldf[s_ordered_categorical_columns] = ldf[s_ordered_categorical_columns].apply(lambda x: x.cat.codes)
+        s_non_categorical_columns = [x for x in list(ldf.columns) if x not in s_categorical_columns]
+
+        ldf1 = ldf[s_non_categorical_columns]
+        ldf2 = pd.get_dummies(ldf[s_categorical_columns])
+        ldf3 = pd.concat([ldf1, ldf2], axis=1)
+        non_y_names = list(ldf3.columns)
+        try:
+            non_y_names.remove(self.y.name)
+            ldf4 = ldf3[non_y_names].copy()
+            ldf4[self.y.name] = ldf3[self.y.name]
+            return ldf4
+        except ValueError:
+            return ldf3
 

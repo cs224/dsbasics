@@ -646,6 +646,14 @@ class TargetVariableDecisionTreeBinTransformer0(BaseBinTransformer):
                 min = np.array([-np.inf])
                 max = np.array([+np.inf])
 
+            if not iscategory and len(thrs_out) < self.max_leaf_nodes - 1:
+                warnings.warn('For column {} len(thrs_out) is {} < max_leaf_nodes ({}) - 1'.format(X.columns[i], len(thrs_out), self.max_leaf_nodes))
+                xmin = x.min()
+                xmax = x.max()
+                if np.isclose(xmin,xmax):
+                    xmax = xmin + 1.0
+                thrs_out = np.linspace(xmin, xmax, self.max_leaf_nodes + 1)[1:-1]
+
             thrs_out = np.concatenate([min, thrs_out, max])
             # thrs_out = np.sort(np.unique(thrs_out))
             bins_ += [thrs_out]
@@ -676,6 +684,10 @@ class TargetVariableDecisionTreeBinTransformer0(BaseBinTransformer):
 
             bin_boundaries = bin
             bin_labels = self.labels_[i]
+
+            if (self.max_leaf_nodes is not None) and (len(bin_boundaries) < self.max_leaf_nodes + 1) and (X.iloc[:,i].dtype.name == 'category'): # leave untouched
+                warnings.warn('Not transforming {}, because number of len(bin boundaries) is {} < max_leaf_nodes ({}) + 1'.format(X.columns[i], len(bin_boundaries), self.max_leaf_nodes))
+                continue
 
             if bin_labels is None:
                 r.iloc[:,i] = pd.cut(X.iloc[:,i], bin_boundaries, right=False)

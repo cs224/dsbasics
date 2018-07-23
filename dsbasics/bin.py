@@ -881,10 +881,11 @@ class MetaDataTransformerBase(sklearn.base.BaseEstimator, sklearn.base.Transform
             raise RuntimeError('The pipeline metadata was not initialized. Check that the chain starts with a MetaDataInitTransformer!')
 
         self.metadata = X.__dict__[global_MetaDataInitTransformer_metadata_key]
+        # print(self.metadata)
 
+        # print('{}: fit, fit_count: {}, transform_count: {}'.format(type(self).__name__, self.fit_count, self.transform_count))
         # print(id(self.metadata))
         # print((id(self.metadata), self.metadata))
-        # print('{}: fit, fit_count: {}, transform_count: {}'.format(type(self).__name__, self.fit_count, self.transform_count))
         self.fit_count += 1
 
         has_y, df, y_untransformed, y = self.extract_X_and_y(X, y)
@@ -1134,6 +1135,12 @@ class MetaDataTransformerClassifierOrRegressorWrapper(MetaDataTransformerBase, s
         y.index = X.index
         return y
 
+    # https://datascience.stackexchange.com/questions/22762/understanding-predict-proba-from-multioutputclassifier
+    def predict_proba(self, X):
+        y = self.base_classifier.predict_proba(X)
+        y.index = X.index
+        return y.values
+
 
 class ClassifierToRegressorHelper(MetaDataTransformerBase, sklearn.base.RegressorMixin):
     def __init__(self, base_classifier):
@@ -1197,3 +1204,41 @@ class TreeRegressorAdapterTransformer(MetaDataTransformerBase):
         except ValueError:
             return ldf3
 
+def column_value_to_exploded_series_adapter(x, left_justify, nmax):
+    if left_justify:
+        ilist = list(x[:nmax].ljust(nmax))
+    else:
+        ilist = list(x[:nmax].rjust(nmax))
+
+    lds = pd.Series(ilist)
+    return lds
+
+class SinglePandasColumnToExplodedCharactersTransformer(MetaDataTransformerBase):
+    def __init__(self, column_name, left_justify=True, nmax=22):
+        super().__init__()
+        self.column_name = column_name
+        self.left_justify = left_justify
+        self.nmax = nmax
+        categories = 'abcdefghijklmnopqrstuvwxyzäöü'.upper()
+        categories += 'abcdefghijklmnopqrstuvwxyzäöü' + 'ß-,./ 0123456789%_'
+        self.cdt = pd.api.types.CategoricalDtype(categories=list(categories))
+
+    def string_ds_to_character_categorical_data_frame(self, lds):
+        ldf = lds.apply(lambda x: column_value_to_exploded_series_adapter(x, self.left_justify, self.nmax))
+
+        for col in ldf.columns:
+            ldf[col] = ldf[col].astype(self.cdt)
+            ldf[col] = ldf[col].fillna('_').astype(self.cdt)
+        ldf.columns = ['x' + str(col) for col in ldf.columns]
+        return ldf
+
+    def fit_with_metadata(self):
+        pass
+        # self.df = self.transform_with_metadata(self.df)
+        # self.df.__dict__[global_MetaDataInitTransformer_metadata_key] = self.metadata
+        # self.df = pd.concat([self.df, self.y], axis=1)
+
+    def transform_with_metadata(self, ldf):
+        lds = ldf[self.column_name].astype(str)
+        ldf = self.string_ds_to_character_categorical_data_frame(lds)
+        return ldf
